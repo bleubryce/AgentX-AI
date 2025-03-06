@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /
+Allow: /dashboard
+Allow: /leads
+Allow: /market-analysis
+Allow: /settings
+
+Disallow: /api/
+Disallow: /auth/
+Disallow: /admin/
+Disallow: /_next/
+Disallow: /static/
+
+Sitemap: https://app.agentxai.com/sitemap.xml 
