@@ -1,0 +1,9 @@
+Content-Length: 0
+Location: https://www.facebook.com/unsupportedbrowser
+Strict-Transport-Security: max-age=31536000; preload; includeSubDomains
+X-Stack: www
+Content-Type: text/html; charset="utf-8"
+X-Fb-Debug: o64LMY7VkPzNQ8iGuW15YGtWYWLMlpVVl8+e7suxwdLMk/n2AmHrSqHvEnKnhXtxL/IK7G7MWVMc7MNQ1f7FGg==
+Date: Mon, 03 Mar 2025 09:21:19 GMT
+Alt-Svc: h3=":443"; ma=86400
+X-Fb-Connection-Quality: EXCELLENT; q=0.9, rtt=21, rtx=0, c=18, mss=1380, tbw=6458, tp=-1, tpl=-1, uplat=49, ullat=0
