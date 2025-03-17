@@ -1,15 +1,22 @@
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import api from '../services/api';
 
-interface User {
+type User = {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
   role: string;
-}
+};
 
-interface AuthContextType {
+type RegisterData = {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+};
+
+type AuthContextType = {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -18,18 +25,11 @@ interface AuthContextType {
   register: (userData: RegisterData) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, password: string) => Promise<void>;
-}
-
-interface RegisterData {
-  email: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-}
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -120,12 +120,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       {children}
     </AuthContext.Provider>
   );
-};
+}
 
-export const useAuth = () => {
+export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-}; 
+} 

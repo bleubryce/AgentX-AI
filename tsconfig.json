@@ -5,7 +5,7 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
-    "types": ["node", "jest", "@testing-library/jest-dom"],
+    "types": ["node", "jest", "@testing-library/jest-dom", "vite/client"],
 
     /* Bundler mode */
     "moduleResolution": "bundler",
@@ -25,7 +25,11 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
-    }
+    },
+    "allowJs": true,
+    "checkJs": false,
+    "jsxImportSource": "react",
+    "noImplicitAny": false
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
