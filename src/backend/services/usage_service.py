@@ -1,205 +1,228 @@
-from typing import Optional, List, Dict, Any
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
-from bson import ObjectId
-from ..models.usage import (
-    Usage, UsageLimit, UsageUpdate, UsageSummary
-)
-from ..db.mongodb import mongodb_client
-from ..services.payment_service import PaymentService
+from fastapi import HTTPException, status
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from ..models.payment import Subscription, SubscriptionPlan
+from ..core.cache import cached, cache_clear
+from ..core.logger import logger
 
 class UsageService:
-    def __init__(self):
-        self.usage_collection = mongodb_client.get_collection("usage")
-        self.limits_collection = mongodb_client.get_collection("usage_limits")
-        self.payment_service = PaymentService()
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.usage_collection = db.usage_metrics
+        self.subscription_collection = db.subscriptions
+        self.plans_collection = db.subscription_plans
 
-    async def get_usage_limit(self, plan_id: str, feature: str) -> Optional[UsageLimit]:
-        """Get usage limit for a feature in a plan."""
-        limit = await self.limits_collection.find_one({
-            "plan_id": plan_id,
-            "feature": feature
-        })
-        if limit:
-            return UsageLimit(**limit)
-        return None
+    async def track_usage(
+        self,
+        user_id: str,
+        metric_name: str,
+        quantity: int = 1,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Track usage for a specific metric."""
+        try:
+            # Get user's active subscription
+            subscription = await self._get_active_subscription(user_id)
+            if not subscription:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No active subscription found"
+                )
 
+            # Get subscription plan limits
+            plan = await self._get_subscription_plan(subscription.plan_id)
+            if not plan:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Subscription plan not found"
+                )
+
+            # Check if metric is within limits
+            current_usage = await self.get_current_usage(user_id, metric_name)
+            limit = plan.limits.get(metric_name)
+            
+            if limit and current_usage + quantity > limit:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Usage limit exceeded for {metric_name}"
+                )
+
+            # Record usage
+            usage_record = {
+                "user_id": user_id,
+                "subscription_id": str(subscription.id),
+                "metric_name": metric_name,
+                "quantity": quantity,
+                "timestamp": datetime.utcnow(),
+                "metadata": metadata or {}
+            }
+            
+            await self.usage_collection.insert_one(usage_record)
+            await self._update_cache(user_id, metric_name)
+            
+            return {
+                "status": "success",
+                "current_usage": current_usage + quantity,
+                "limit": limit
+            }
+
+        except HTTPException as e:
+            raise e
+        except Exception as e:
+            logger.error(f"Error tracking usage: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error tracking usage"
+            )
+
+    @cached(key_prefix="usage", expire=300)  # Cache for 5 minutes
     async def get_current_usage(
         self,
         user_id: str,
-        subscription_id: str,
-        feature: str
-    ) -> Optional[Usage]:
-        """Get current usage for a feature."""
-        usage = await self.usage_collection.find_one({
-            "user_id": user_id,
-            "subscription_id": subscription_id,
-            "feature": feature,
-            "period_end": {"$gt": datetime.utcnow()}
-        })
-        if usage:
-            return Usage(**usage)
-        return None
+        metric_name: str,
+        start_time: Optional[datetime] = None
+    ) -> int:
+        """Get current usage for a specific metric."""
+        try:
+            if not start_time:
+                # Default to start of current billing period
+                subscription = await self._get_active_subscription(user_id)
+                if not subscription:
+                    return 0
+                start_time = subscription.current_period_start
 
-    async def create_usage_record(
-        self,
-        user_id: str,
-        subscription_id: str,
-        feature: str,
-        limit: UsageLimit
-    ) -> Usage:
-        """Create a new usage record."""
-        now = datetime.utcnow()
-        period_start = now
-        period_end = now + self._get_period_timedelta(limit.period)
-
-        usage = Usage(
-            user_id=user_id,
-            subscription_id=subscription_id,
-            feature=feature,
-            count=0,
-            period_start=period_start,
-            period_end=period_end,
-            last_reset=now
-        )
-
-        result = await self.usage_collection.insert_one(usage.dict())
-        usage.id = str(result.inserted_id)
-        return usage
-
-    async def increment_usage(
-        self,
-        user_id: str,
-        subscription_id: str,
-        feature: str,
-        count: int = 1,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Usage:
-        """Increment usage for a feature."""
-        # Get subscription and plan
-        subscription = await self.payment_service.get_subscription(subscription_id)
-        if not subscription:
-            raise ValueError("Subscription not found")
-
-        # Get usage limit
-        limit = await self.get_usage_limit(subscription.plan_id, feature)
-        if not limit:
-            raise ValueError(f"No usage limit found for feature: {feature}")
-
-        # Get or create usage record
-        usage = await self.get_current_usage(user_id, subscription_id, feature)
-        if not usage:
-            usage = await self.create_usage_record(user_id, subscription_id, feature, limit)
-
-        # Check if we need to reset the counter
-        if datetime.utcnow() > usage.period_end:
-            usage = await self.reset_usage(user_id, subscription_id, feature, limit)
-
-        # Check if we've exceeded the limit
-        if usage.count + count > limit.limit:
-            raise ValueError(f"Usage limit exceeded for feature: {feature}")
-
-        # Update usage count
-        update_dict = {
-            "count": usage.count + count,
-            "updated_at": datetime.utcnow()
-        }
-        if metadata:
-            update_dict["metadata"] = metadata
-
-        result = await self.usage_collection.find_one_and_update(
-            {"_id": ObjectId(usage.id)},
-            {"$set": update_dict},
-            return_document=True
-        )
-        return Usage(**result)
-
-    async def reset_usage(
-        self,
-        user_id: str,
-        subscription_id: str,
-        feature: str,
-        limit: UsageLimit
-    ) -> Usage:
-        """Reset usage counter for a feature."""
-        now = datetime.utcnow()
-        period_start = now
-        period_end = now + self._get_period_timedelta(limit.period)
-
-        result = await self.usage_collection.find_one_and_update(
-            {
-                "user_id": user_id,
-                "subscription_id": subscription_id,
-                "feature": feature
-            },
-            {
-                "$set": {
-                    "count": 0,
-                    "period_start": period_start,
-                    "period_end": period_end,
-                    "last_reset": now,
-                    "updated_at": now
+            pipeline = [
+                {
+                    "$match": {
+                        "user_id": user_id,
+                        "metric_name": metric_name,
+                        "timestamp": {"$gte": start_time}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "total": {"$sum": "$quantity"}
+                    }
                 }
-            },
-            return_document=True
-        )
-        return Usage(**result)
+            ]
 
-    async def get_usage_summary(
+            result = await self.usage_collection.aggregate(pipeline).to_list(1)
+            return result[0]["total"] if result else 0
+
+        except Exception as e:
+            logger.error(f"Error getting usage: {str(e)}")
+            return 0
+
+    async def get_usage_report(
         self,
         user_id: str,
-        subscription_id: str,
-        feature: str
-    ) -> Optional[UsageSummary]:
-        """Get usage summary for a feature."""
-        usage = await self.get_current_usage(user_id, subscription_id, feature)
-        if not usage:
-            return None
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Generate usage report for all metrics."""
+        try:
+            if not start_time:
+                start_time = datetime.utcnow() - timedelta(days=30)
+            if not end_time:
+                end_time = datetime.utcnow()
 
-        subscription = await self.payment_service.get_subscription(subscription_id)
-        if not subscription:
-            return None
+            pipeline = [
+                {
+                    "$match": {
+                        "user_id": user_id,
+                        "timestamp": {
+                            "$gte": start_time,
+                            "$lte": end_time
+                        }
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$metric_name",
+                        "total": {"$sum": "$quantity"},
+                        "daily_usage": {
+                            "$push": {
+                                "date": "$timestamp",
+                                "quantity": "$quantity"
+                            }
+                        }
+                    }
+                }
+            ]
 
-        limit = await self.get_usage_limit(subscription.plan_id, feature)
-        if not limit:
-            return None
+            results = await self.usage_collection.aggregate(pipeline).to_list(None)
+            
+            # Get subscription plan limits
+            subscription = await self._get_active_subscription(user_id)
+            plan = await self._get_subscription_plan(subscription.plan_id) if subscription else None
+            
+            usage_report = {
+                "period_start": start_time,
+                "period_end": end_time,
+                "metrics": {}
+            }
 
-        return UsageSummary(
-            feature=feature,
-            current_usage=usage.count,
-            limit=limit.limit,
-            remaining=limit.limit - usage.count,
-            period_start=usage.period_start,
-            period_end=usage.period_end,
-            last_reset=usage.last_reset
-        )
+            for result in results:
+                metric_name = result["_id"]
+                usage_report["metrics"][metric_name] = {
+                    "total": result["total"],
+                    "limit": plan.limits.get(metric_name) if plan else None,
+                    "daily_usage": self._aggregate_daily_usage(
+                        result["daily_usage"],
+                        start_time,
+                        end_time
+                    )
+                }
 
-    async def get_all_usage_summaries(
+            return usage_report
+
+        except Exception as e:
+            logger.error(f"Error generating usage report: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error generating usage report"
+            )
+
+    def _aggregate_daily_usage(
         self,
-        user_id: str,
-        subscription_id: str
-    ) -> List[UsageSummary]:
-        """Get usage summaries for all features."""
-        subscription = await self.payment_service.get_subscription(subscription_id)
-        if not subscription:
-            return []
+        usage_data: List[Dict[str, Any]],
+        start_time: datetime,
+        end_time: datetime
+    ) -> List[Dict[str, Any]]:
+        """Aggregate usage data by day."""
+        daily_usage = {}
+        current_date = start_time.date()
+        end_date = end_time.date()
 
-        limits = await self.limits_collection.find({"plan_id": subscription.plan_id}).to_list(length=None)
-        summaries = []
+        while current_date <= end_date:
+            daily_usage[current_date] = 0
+            current_date += timedelta(days=1)
 
-        for limit in limits:
-            summary = await self.get_usage_summary(user_id, subscription_id, limit["feature"])
-            if summary:
-                summaries.append(summary)
+        for usage in usage_data:
+            date = usage["date"].date()
+            daily_usage[date] = daily_usage.get(date, 0) + usage["quantity"]
 
-        return summaries
+        return [
+            {"date": date, "quantity": quantity}
+            for date, quantity in daily_usage.items()
+        ]
 
-    def _get_period_timedelta(self, period: str) -> timedelta:
-        """Convert period string to timedelta."""
-        if period == "daily":
-            return timedelta(days=1)
-        elif period == "monthly":
-            return timedelta(days=30)
-        elif period == "yearly":
-            return timedelta(days=365)
-        else:
-            raise ValueError(f"Invalid period: {period}") 
+    async def _get_active_subscription(self, user_id: str) -> Optional[Subscription]:
+        """Get user's active subscription."""
+        subscription = await self.subscription_collection.find_one({
+            "user_id": user_id,
+            "status": "active"
+        })
+        return Subscription(**subscription) if subscription else None
+
+    async def _get_subscription_plan(self, plan_id: str) -> Optional[SubscriptionPlan]:
+        """Get subscription plan."""
+        plan = await self.plans_collection.find_one({"_id": plan_id})
+        return SubscriptionPlan(**plan) if plan else None
+
+    async def _update_cache(self, user_id: str, metric_name: str) -> None:
+        """Clear usage cache for user and metric."""
+        cache_key = f"usage:{user_id}:{metric_name}"
+        await cache_clear(cache_key) 

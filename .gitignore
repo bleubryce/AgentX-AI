@@ -1,13 +1,9 @@
-# Environment variables
-.env
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -19,9 +15,42 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
 
 # Virtual Environment
 venv/
@@ -47,29 +76,7 @@ mongodb_data/
 # Jupyter Notebooks
 .ipynb_checkpoints
 
-# Testing
-.coverage
-htmlcov/
-.pytest_cache/
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
 # Temporary files
 tmp/
 temp/ 
+node_modules

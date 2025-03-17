@@ -10,130 +10,121 @@ from ....models.user import (
     SessionInfo
 )
 from ....services.user_service import UserService
+from ....core.security import SecurityUtils
+from ....core.auth import (
+    get_current_user,
+    AuthMiddleware
+)
+from ....core.cache import rate_limit
 
 router = APIRouter()
 
-@router.post("/token", response_model=Token)
-async def login_for_access_token(
+@router.post("/register", response_model=User)
+@rate_limit(max_requests=10, window=3600)  # 10 registrations per hour
+async def register(
+    user_data: UserCreate,
+    user_service: UserService = Depends()
+) -> Any:
+    """Register a new user."""
+    return await user_service.create_user(user_data)
+
+@router.post("/login", response_model=Token)
+@rate_limit(max_requests=5, window=300)  # 5 attempts per 5 minutes
+async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     user_service: UserService = Depends()
 ) -> Any:
-    """OAuth2 compatible token login with refresh token."""
-    user = await user_service.authenticate_user(form_data.username, form_data.password)
-    if not user:
-        await user_service.increment_failed_login_attempts(user.id)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    """Login user and return tokens."""
+    # Get device info
+    device_info = {
+        "ip": request.client.host,
+        "user_agent": request.headers.get("user-agent"),
+        "device": request.headers.get("sec-ch-ua")
+    }
     
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-    
-    # Generate session ID
-    session_id = str(uuid.uuid4())
-    
-    # Create access and refresh tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    refresh_token_expires = timedelta(days=7)
-    
-    access_token = create_access_token(
-        data={
-            "sub": str(user.id),
-            "type": "access",
-            "session_id": session_id
-        },
-        expires_delta=access_token_expires
+    # Authenticate user
+    user, session_id, refresh_expires = await user_service.authenticate(
+        form_data.username,
+        form_data.password,
+        device_info
     )
     
-    refresh_token = create_access_token(
-        data={
-            "sub": str(user.id),
-            "type": "refresh",
-            "session_id": session_id
-        },
-        expires_delta=refresh_token_expires
-    )
-    
-    # Store session information
-    await user_service.add_session(
+    # Create access token
+    access_token = SecurityUtils.create_access_token(
         user.id,
         session_id,
-        request.client.host,
-        request.headers.get("user-agent")
+        user.roles
     )
     
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        "refresh_token": refresh_token,
-        "refresh_token_expires_in": 7 * 24 * 60 * 60  # 7 days in seconds
-    }
+    # Create refresh token
+    refresh_token, _ = SecurityUtils.create_refresh_token(
+        user.id,
+        session_id
+    )
+    
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        refresh_token_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    )
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
     refresh_token: RefreshToken,
     user_service: UserService = Depends()
 ) -> Any:
-    """Refresh access token using refresh token."""
+    """Refresh access token."""
     try:
-        payload = jwt.decode(
+        # Verify refresh token
+        token_data = SecurityUtils.verify_token(
             refresh_token.refresh_token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
+            token_type="refresh"
         )
-        user_id = payload.get("sub")
-        session_id = payload.get("session_id")
         
-        if not user_id or not session_id:
+        # Get user
+        user = await user_service.get_by_id(token_data.sub)
+        if not user:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid refresh token"
-            )
-        
-        user = await user_service.get_user(user_id)
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
             )
         
         # Verify session is still valid
-        if not await user_service.verify_session(user_id, session_id):
+        if not await user_service.is_valid_session(
+            user.id,
+            token_data.session_id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired session"
+                detail="Session has been invalidated"
             )
         
         # Create new access token
-        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={
-                "sub": str(user.id),
-                "type": "access",
-                "session_id": session_id
-            },
-            expires_delta=access_token_expires
+        access_token = SecurityUtils.create_access_token(
+            user.id,
+            token_data.session_id,
+            user.roles
         )
         
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "refresh_token": refresh_token.refresh_token,
-            "refresh_token_expires_in": 7 * 24 * 60 * 60
-        }
+        # Create new refresh token
+        new_refresh_token, refresh_expires = SecurityUtils.create_refresh_token(
+            user.id,
+            token_data.session_id
+        )
         
-    except JWTError:
+        return Token(
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            refresh_token_expires_in=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+        )
+        
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
+            detail=str(e)
         )
 
 @router.post("/logout")
@@ -141,9 +132,82 @@ async def logout(
     current_user: User = Depends(get_current_user),
     user_service: UserService = Depends()
 ) -> Any:
-    """Logout user and invalidate session."""
-    await user_service.remove_session(current_user.id)
+    """Logout user and invalidate current session."""
+    # Get current session ID from token
+    token_data = SecurityUtils.verify_token(current_user.access_token)
+    
+    # Invalidate session
+    await user_service.invalidate_session(
+        current_user.id,
+        token_data.session_id
+    )
+    
     return {"message": "Successfully logged out"}
+
+@router.post("/logout-all")
+async def logout_all(
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends()
+) -> Any:
+    """Logout user from all sessions."""
+    await user_service.invalidate_all_sessions(current_user.id)
+    return {"message": "Successfully logged out from all sessions"}
+
+@router.post("/verify-email/{token}")
+@rate_limit(max_requests=5, window=3600)  # 5 attempts per hour
+async def verify_email(
+    token: str,
+    user_service: UserService = Depends()
+) -> Any:
+    """Verify user's email address."""
+    if await user_service.verify_email(token):
+        return {"message": "Email successfully verified"}
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired verification token"
+    )
+
+@router.post("/request-password-reset")
+@rate_limit(max_requests=3, window=3600)  # 3 attempts per hour
+async def request_password_reset(
+    email: str,
+    user_service: UserService = Depends()
+) -> Any:
+    """Request password reset token."""
+    token = await user_service.request_password_reset(email)
+    if token:
+        # TODO: Send email with reset token
+        return {"message": "Password reset instructions sent to email"}
+    return {"message": "If email exists, password reset instructions will be sent"}
+
+@router.post("/reset-password/{token}")
+@rate_limit(max_requests=3, window=3600)  # 3 attempts per hour
+async def reset_password(
+    token: str,
+    new_password: str,
+    user_service: UserService = Depends()
+) -> Any:
+    """Reset password using reset token."""
+    if await user_service.reset_password(token, new_password):
+        return {"message": "Password successfully reset"}
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid or expired reset token"
+    )
+
+@router.get("/me", response_model=User)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """Get current user information."""
+    return current_user
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def get_active_sessions(
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """Get user's active sessions."""
+    return current_user.active_sessions
 
 @router.get("/sessions", response_model=List[SessionInfo])
 async def list_active_sessions(
@@ -210,13 +274,6 @@ async def reset_password(
     """Reset password using token."""
     # TODO: Implement password reset logic
     return {"message": "Password reset successful"}
-
-@router.get("/me", response_model=UserResponse)
-async def read_users_me(
-    current_user: User = Depends(get_current_user)
-) -> Any:
-    """Get current user."""
-    return current_user
 
 @router.put("/me", response_model=UserResponse)
 async def update_user_me(

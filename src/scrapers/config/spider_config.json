@@ -1,0 +1,76 @@
+{
+  "scraping": {
+    "price_min": 100000,
+    "price_max": 1000000,
+    "max_retries": 5,
+    "request_timeout": 30,
+    "download_delay": {
+      "default": 5,
+      "zillow": 8,
+      "realtor": 6
+    },
+    "concurrent_requests": {
+      "default": 1,
+      "zillow": 1,
+      "realtor": 1
+    }
+  },
+  "filters": {
+    "lead_indicators": [
+      "looking to buy",
+      "want to purchase",
+      "searching for home",
+      "pre-approved",
+      "pre approved",
+      "mortgage ready",
+      "ready to buy",
+      "house hunting",
+      "first time buyer",
+      "relocating"
+    ],
+    "excluded_terms": [
+      "not for sale",
+      "off market",
+      "sold",
+      "pending",
+      "under contract",
+      "foreclosure",
+      "auction"
+    ],
+    "property_types": [
+      "single family",
+      "condo",
+      "townhouse",
+      "multi-family"
+    ]
+  },
+  "validation": {
+    "required_fields": [
+      "price",
+      "address",
+      "description"
+    ],
+    "min_description_length": 50,
+    "max_description_length": 5000,
+    "valid_price_formats": [
+      "\\$[0-9,]+",
+      "[0-9,.]+\\s*USD"
+    ]
+  },
+  "export": {
+    "formats": ["json", "csv"],
+    "batch_size": 100,
+    "compress": true
+  },
+  "monitoring": {
+    "stats_collection": true,
+    "memory_limit_mb": 512,
+    "log_level": "INFO",
+    "metrics": {
+      "request_rate": true,
+      "success_rate": true,
+      "error_rate": true,
+      "response_time": true
+    }
+  }
+} 

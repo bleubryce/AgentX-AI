@@ -1,24 +1,41 @@
 module.exports = {
-  testEnvironment: 'node',
+  testEnvironment: 'jsdom',
   verbose: true,
-  testMatch: ['**/__tests__/**/*.js'],
+  testMatch: [
+    '**/__tests__/**/*.[jt]s?(x)',
+    '**/?(*.)+(spec|test).[jt]s?(x)'
+  ],
   collectCoverage: true,
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov'],
+  coverageReporters: ['text', 'lcov', 'html'],
   coverageThreshold: {
     global: {
       statements: 70,
-      branches: 20,
-      functions: 65,
+      branches: 60,
+      functions: 70,
       lines: 70
     }
   },
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/backend/$1'
+    '^@/(.*)$': '<rootDir>/src/$1',
+    '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
+    '\\.(jpg|jpeg|png|gif|webp|svg)$': '<rootDir>/__mocks__/fileMock.js'
   },
   moduleDirectories: ['node_modules', 'src'],
-  moduleFileExtensions: ['js', 'mjs', 'cjs', 'jsx', 'json', 'node'],
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
+  setupFilesAfterEnv: [
+    '<rootDir>/src/setupTests.ts',
+    '@testing-library/jest-dom/extend-expect'
+  ],
   rootDir: '.',
-  modulePaths: ['<rootDir>/src/backend']
+  transform: {
+    '^.+\\.(ts|tsx)$': 'ts-jest'
+  },
+  modulePaths: ['<rootDir>/src'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+  globals: {
+    'ts-jest': {
+      tsconfig: 'tsconfig.json'
+    }
+  }
 }; 

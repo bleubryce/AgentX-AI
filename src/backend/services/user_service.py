@@ -1,14 +1,21 @@
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 from bson import ObjectId
+from fastapi import HTTPException, status
 from ..models.user import User, UserCreate, UserUpdate, UserInDB, SessionInfo
 from ..core.deps import get_password_hash, verify_password
 from ..db.mongodb import mongodb_client
 from ..core.config import settings
+from ..core.security import SecurityUtils
+from ..core.cache import Cache
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 class UserService:
-    def __init__(self):
-        self.collection = mongodb_client.get_collection("users")
+    """Service for handling user-related operations."""
+    
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.collection = db.users
         self.sessions_collection = mongodb_client.get_collection("sessions")
 
     async def get_user(self, user_id: str) -> Optional[User]:
@@ -25,16 +32,34 @@ class UserService:
             return User(**user)
         return None
 
-    async def create_user(self, user: UserCreate) -> User:
-        """Create new user."""
-        user_dict = user.dict()
-        user_dict["hashed_password"] = get_password_hash(user_dict.pop("password"))
-        user_dict["created_at"] = datetime.utcnow()
-        user_dict["updated_at"] = datetime.utcnow()
+    async def create_user(self, user_data: UserCreate) -> User:
+        """Create a new user."""
+        # Check if email already exists
+        if await self.get_by_email(user_data.email):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
         
-        result = await self.collection.insert_one(user_dict)
-        user_dict["_id"] = result.inserted_id
-        return User(**user_dict)
+        # Create user with hashed password
+        user_in_db = UserInDB(
+            **user_data.dict(),
+            hashed_password=SecurityUtils.get_password_hash(user_data.password),
+            verification_token=SecurityUtils.generate_verification_token()
+        )
+        
+        # Insert into database
+        result = await self.collection.insert_one(user_in_db.dict(by_alias=True))
+        
+        # Get created user
+        user = await self.get_by_id(result.inserted_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user"
+            )
+        
+        return user
 
     async def update_user(self, user_id: str, user_update: UserUpdate) -> Optional[User]:
         """Update user."""
@@ -49,13 +74,19 @@ class UserService:
             return_document=True
         )
         if result:
+            # Clear user cache
+            await Cache.delete(f"user:{user_id}")
             return User(**result)
         return None
 
     async def delete_user(self, user_id: str) -> bool:
         """Delete user."""
         result = await self.collection.delete_one({"_id": ObjectId(user_id)})
-        return result.deleted_count > 0
+        if result.deleted_count:
+            # Clear user cache
+            await Cache.delete(f"user:{user_id}")
+            return True
+        return False
 
     async def authenticate_user(self, email: str, password: str) -> Optional[User]:
         """Authenticate user."""
@@ -249,4 +280,133 @@ class UserService:
                 )
             
             return len(expired_sessions)
-        return 0 
+        return 0
+
+    async def get_by_id(self, user_id: str) -> Optional[User]:
+        """Get user by ID."""
+        user_dict = await self.collection.find_one({"_id": ObjectId(user_id)})
+        return User(**user_dict) if user_dict else None
+
+    async def get_by_email(self, email: str) -> Optional[UserInDB]:
+        """Get user by email."""
+        user_dict = await self.collection.find_one({"email": email})
+        return UserInDB(**user_dict) if user_dict else None
+
+    async def verify_email(self, token: str) -> bool:
+        """Verify user's email."""
+        result = await self.collection.update_one(
+            {
+                "verification_token": token,
+                "is_email_verified": False
+            },
+            {
+                "$set": {
+                    "is_email_verified": True,
+                    "verification_token": None,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        return bool(result.modified_count)
+
+    async def request_password_reset(self, email: str) -> Optional[str]:
+        """Request password reset and return token."""
+        user = await self.get_by_email(email)
+        if not user:
+            return None
+        
+        token = SecurityUtils.generate_password_reset_token()
+        expires = datetime.utcnow() + timedelta(hours=24)
+        
+        await self.collection.update_one(
+            {"_id": user.id},
+            {
+                "$set": {
+                    "password_reset_token": token,
+                    "password_reset_expires": expires,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        return token
+
+    async def reset_password(self, token: str, new_password: str) -> bool:
+        """Reset user's password using reset token."""
+        result = await self.collection.update_one(
+            {
+                "password_reset_token": token,
+                "password_reset_expires": {"$gt": datetime.utcnow()}
+            },
+            {
+                "$set": {
+                    "hashed_password": SecurityUtils.get_password_hash(new_password),
+                    "password_reset_token": None,
+                    "password_reset_expires": None,
+                    "last_password_change": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        return bool(result.modified_count)
+
+    async def increment_failed_login(self, user_id: str) -> None:
+        """Increment failed login attempts and possibly lock account."""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return
+        
+        failed_attempts = user.failed_login_attempts + 1
+        update_data = {
+            "failed_login_attempts": failed_attempts,
+            "updated_at": datetime.utcnow()
+        }
+        
+        # Lock account after 5 failed attempts
+        if failed_attempts >= 5:
+            update_data["account_locked_until"] = datetime.utcnow() + timedelta(minutes=15)
+        
+        await self.collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
+        )
+
+    async def is_valid_session(self, user_id: str, session_id: str) -> bool:
+        """Check if session is valid for user."""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return False
+        
+        return any(
+            session.get("session_id") == session_id
+            for session in user.active_sessions
+        )
+
+    async def invalidate_session(
+        self,
+        user_id: str,
+        session_id: str
+    ) -> bool:
+        """Invalidate user session."""
+        result = await self.collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$pull": {
+                    "active_sessions": {"session_id": session_id}
+                }
+            }
+        )
+        return bool(result.modified_count)
+
+    async def invalidate_all_sessions(self, user_id: str) -> bool:
+        """Invalidate all user sessions."""
+        result = await self.collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "active_sessions": [],
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        return bool(result.modified_count) 

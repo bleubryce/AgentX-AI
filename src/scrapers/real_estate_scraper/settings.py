@@ -7,6 +7,12 @@
 #     https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 BOT_NAME = "real_estate_scraper"
 
 SPIDER_MODULES = ["real_estate_scraper.spiders"]
@@ -19,13 +25,10 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 ROBOTSTXT_OBEY = True
 
 # Configure maximum concurrent requests performing at the same time to the same domain
-CONCURRENT_REQUESTS = 16
+CONCURRENT_REQUESTS_PER_DOMAIN = 1
 
-# Configure a delay for requests for the same website (default: 0)
-DOWNLOAD_DELAY = 1
-# The download delay setting will honor only one of:
-CONCURRENT_REQUESTS_PER_DOMAIN = 8
-CONCURRENT_REQUESTS_PER_IP = 8
+# Configure a delay for requests for the same website
+DOWNLOAD_DELAY = 5
 
 # Disable cookies (enabled by default)
 COOKIES_ENABLED = False
@@ -47,9 +50,9 @@ COOKIES_ENABLED = False
 
 # Enable or disable downloader middlewares
 DOWNLOADER_MIDDLEWARES = {
-    "scrapy.downloadermiddlewares.useragent.UserAgentMiddleware": None,
-    "scrapy.downloadermiddlewares.retry.RetryMiddleware": 500,
-    "scrapy.downloadermiddlewares.redirect.RedirectMiddleware": 600,
+    "scrapy.downloadermiddlewares.retry.RetryMiddleware": 90,
+    "scrapy_rotating_proxies.middlewares.RotatingProxyMiddleware": 610,
+    "scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware": 110,
 }
 
 # Enable or disable extensions
@@ -60,8 +63,8 @@ DOWNLOADER_MIDDLEWARES = {
 
 # Configure item pipelines
 ITEM_PIPELINES = {
-    "real_estate_scraper.pipelines.DuplicateFilterPipeline": 100,
-    "real_estate_scraper.pipelines.MongoDBPipeline": 300,
+    "real_estate_scraper.pipelines.LeadValidationPipeline": 300,
+    "real_estate_scraper.pipelines.MongoPipeline": 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
@@ -80,25 +83,26 @@ AUTOTHROTTLE_DEBUG = False
 # Enable and configure HTTP caching (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
 HTTPCACHE_ENABLED = True
-HTTPCACHE_EXPIRATION_SECS = 86400  # 24 hours
+HTTPCACHE_EXPIRATION_SECS = 0
 HTTPCACHE_DIR = "httpcache"
-HTTPCACHE_IGNORE_HTTP_CODES = [500, 502, 503, 504, 400, 401, 403, 404, 408]
+HTTPCACHE_IGNORE_HTTP_CODES = []
 HTTPCACHE_STORAGE = "scrapy.extensions.httpcache.FilesystemCacheStorage"
 
 # Set settings whose default value is deprecated to a future-proof value
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
-TWISTED_REACTOR = "twisted.internet.selectreactor.SelectReactor"
+TWISTED_REACTOR = "twisted.internet.asyncio.AsyncioSelectorReactor"
 FEED_EXPORT_ENCODING = "utf-8"
 
-# Retry settings
+# Enable and configure retry middleware
 RETRY_ENABLED = True
-RETRY_TIMES = 3
-RETRY_HTTP_CODES = [500, 502, 503, 504, 400, 408, 429]
+RETRY_TIMES = 5
+RETRY_HTTP_CODES = [500, 502, 503, 504, 522, 524, 408, 429]
 
 # Enable logging
 LOG_ENABLED = True
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+LOG_FILE = os.path.join('logs', 'spider.log')
 
 # Enable memory usage monitoring
 MEMUSAGE_ENABLED = True
@@ -114,3 +118,22 @@ DOWNLOAD_TIMEOUT = 180
 
 # Enable compression
 COMPRESSION_ENABLED = True
+
+# Enable and configure proxy settings
+ROTATING_PROXY_LIST_PATH = os.path.join('config', 'proxies.json')
+
+# MongoDB settings
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+MONGO_DATABASE = os.getenv('MONGO_DATABASE', 'real_estate_leads')
+
+# Playwright settings
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.PlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.PlaywrightDownloadHandler",
+}
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+PLAYWRIGHT_LAUNCH_OPTIONS = {
+    "headless": True,
+    "timeout": 20 * 1000,  # 20 seconds
+}
+PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30 * 1000  # 30 seconds

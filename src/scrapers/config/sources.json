@@ -1,0 +1,68 @@
+{
+  "zillow": {
+    "start_urls": [
+      "https://www.zillow.com/homes/for_sale/"
+    ],
+    "allowed_domains": ["zillow.com"],
+    "max_leads": 1000,
+    "selectors": {
+      "price": [
+        "//span[@data-test='property-card-price']/text()",
+        "//span[contains(@class, 'ds-value')]/text()"
+      ],
+      "address": [
+        "//address[@data-test='property-card-addr']/text()",
+        "//h1[contains(@class, 'ds-address-container')]/text()"
+      ],
+      "description": [
+        "//div[@data-test='property-card-details']/text()",
+        "//div[contains(@class, 'ds-overview-section')]/div/text()"
+      ],
+      "contact": [
+        "//div[contains(@class, 'agent-info')]//a[contains(@href, 'mailto:')]/@href",
+        "//a[contains(@class, 'ds-agent-details-link')]/@href"
+      ],
+      "features": [
+        "//ul[contains(@class, 'ds-home-fact-list')]/li/text()",
+        "//div[contains(@class, 'ds-home-details-chip')]/text()"
+      ]
+    },
+    "pagination": {
+      "next_page": "//a[@title='Next page']/@href",
+      "max_pages": 100
+    }
+  },
+  "realtor": {
+    "start_urls": [
+      "https://www.realtor.com/realestateandhomes-search/"
+    ],
+    "allowed_domains": ["realtor.com"],
+    "max_leads": 1000,
+    "selectors": {
+      "price": [
+        "//span[@data-label='pc-price']/text()",
+        "//div[contains(@class, 'price')]/span/text()"
+      ],
+      "address": [
+        "//div[@data-label='pc-address']/text()",
+        "//div[contains(@class, 'location-info')]/text()"
+      ],
+      "description": [
+        "//div[@data-label='property-description']/text()",
+        "//div[contains(@class, 'description')]/text()"
+      ],
+      "contact": [
+        "//a[contains(@href, 'mailto:agent')]/@href",
+        "//div[contains(@class, 'agent-info')]//a/@href"
+      ],
+      "features": [
+        "//ul[contains(@class, 'feature-list')]/li/text()",
+        "//div[contains(@class, 'features-container')]/div/text()"
+      ]
+    },
+    "pagination": {
+      "next_page": "//a[@aria-label='Go to next page']/@href",
+      "max_pages": 100
+    }
+  }
+} 

@@ -1,0 +1,27 @@
+{
+  "price_min": 100000,
+  "price_max": 1000000,
+  "lead_indicators": [
+    "looking to buy",
+    "want to purchase",
+    "searching for home",
+    "pre-approved",
+    "pre approved",
+    "mortgage ready",
+    "ready to buy",
+    "house hunting",
+    "first time buyer",
+    "relocating"
+  ],
+  "excluded_terms": [
+    "not for sale",
+    "off market",
+    "sold",
+    "pending",
+    "under contract"
+  ],
+  "max_retries": 5,
+  "request_timeout": 30,
+  "download_delay": 5,
+  "concurrent_requests": 1
+} 

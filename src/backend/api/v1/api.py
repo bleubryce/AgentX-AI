@@ -1,46 +1,77 @@
 from fastapi import APIRouter
-from .endpoints import auth, leads, market_analysis, payments, usage, agents
+from .endpoints import (
+    auth,
+    users,
+    payments,
+    subscriptions,
+    analytics,
+    reports,
+    agents,
+    webhooks,
+    leads
+)
 
 api_router = APIRouter()
 
-# Include authentication endpoints
+# Auth routes
 api_router.include_router(
     auth.router,
     prefix="/auth",
-    tags=["authentication"]
+    tags=["Authentication"]
 )
 
-# Include lead generation endpoints
+# User routes
 api_router.include_router(
-    leads.router,
-    prefix="/leads",
-    tags=["leads"]
+    users.router,
+    prefix="/users",
+    tags=["Users"]
 )
 
-# Include market analysis endpoints
-api_router.include_router(
-    market_analysis.router,
-    prefix="/market-analysis",
-    tags=["market-analysis"]
-)
-
-# Include payment endpoints
+# Payment routes
 api_router.include_router(
     payments.router,
     prefix="/payments",
-    tags=["payments"]
+    tags=["Payments"]
 )
 
-# Include usage endpoints
+# Subscription routes
 api_router.include_router(
-    usage.router,
-    prefix="/usage",
-    tags=["usage"]
+    subscriptions.router,
+    prefix="/subscriptions",
+    tags=["Subscriptions"]
 )
 
-# Include agent endpoints
+# Analytics routes
+api_router.include_router(
+    analytics.router,
+    prefix="/analytics",
+    tags=["Analytics"]
+)
+
+# Reports routes
+api_router.include_router(
+    reports.router,
+    prefix="/reports",
+    tags=["Reports"]
+)
+
+# Agent routes
 api_router.include_router(
     agents.router,
     prefix="/agents",
-    tags=["agents"]
+    tags=["Agents"]
+)
+
+# Lead routes
+api_router.include_router(
+    leads.router,
+    prefix="/leads",
+    tags=["Leads"]
+)
+
+# Webhooks routes
+api_router.include_router(
+    webhooks.router,
+    prefix="/webhooks",
+    tags=["Webhooks"]
 ) 

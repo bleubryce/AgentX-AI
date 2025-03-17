@@ -1,119 +1,145 @@
 #!/usr/bin/env python3
 """
-Script to run the social leads spider.
+Spider runner script with configuration and error handling
 """
 
 import os
 import sys
+import json
 import logging
-import argparse
-from dotenv import load_dotenv
+from typing import List, Dict, Any, Optional
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
-from real_estate_scraper.spiders.social_leads_spider import SocialLeadsSpider
-
-# Load environment variables from .env file
-load_dotenv()
+from datetime import datetime
+from pathlib import Path
+from spiders.real_estate_spider import RealEstateSpider
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
+        logging.FileHandler('spider.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
 
 logger = logging.getLogger(__name__)
 
-def check_credentials():
-    """Check if required credentials are set."""
-    required_vars = [
-        'TWITTER_USERNAME', 'TWITTER_PASSWORD',
-        'FACEBOOK_EMAIL', 'FACEBOOK_PASSWORD'
-    ]
-    
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
-        logger.error(f"Missing required credentials: {', '.join(missing)}")
-        logger.error("Please set these in your .env file")
-        sys.exit(1)
-
-def run_spider(location: str, lead_type: str = 'buy', output_file: str = None):
-    """
-    Run the social leads spider.
-    
-    Args:
-        location: Location to search for leads (city, state)
-        lead_type: Type of lead to search for (buy, sell, refi)
-        output_file: File to save the results to (optional)
-    """
-    try:
-        # Check credentials before running
-        check_credentials()
+class SpiderRunner:
+    def __init__(self, config_path: str = "config/sources.json", 
+                 proxy_path: str = "config/proxies.json",
+                 output_dir: str = "data/leads"):
+        self.config_path = config_path
+        self.proxy_path = proxy_path
+        self.output_dir = output_dir
+        self.sources = self._load_sources()
+        self.proxies = self._load_proxies()
+        self._setup_logging()
         
-        settings = get_project_settings()
+    def _setup_logging(self):
+        """Configure logging for the spider runner"""
+        log_dir = "logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(log_dir, f"spider_run_{timestamp}.log")
         
-        # Configure output settings if specified
-        if output_file:
-            settings['FEEDS'] = {
-                output_file: {
-                    'format': 'json',
-                    'encoding': 'utf8',
-                    'indent': 2
-                }
-            }
-        
-        # Initialize the crawler process
-        process = CrawlerProcess(settings)
-        
-        # Run the spider
-        process.crawl(
-            SocialLeadsSpider,
-            location=location,
-            lead_type=lead_type
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
         )
         
-        logger.info(f"Starting spider for {lead_type} leads in {location}")
-        process.start()
+    def _load_sources(self) -> Dict:
+        """Load source configurations from JSON file"""
+        try:
+            if not os.path.exists(self.config_path):
+                raise FileNotFoundError(f"Source configuration file not found: {self.config_path}")
+                
+            with open(self.config_path, 'r') as f:
+                sources = json.load(f)
+            logging.info(f"Loaded {len(sources)} source configurations")
+            return sources
+        except json.JSONDecodeError as e:
+            logging.error(f"Error parsing source configuration: {str(e)}")
+            raise
+            
+    def _load_proxies(self) -> List[str]:
+        """Load proxy list from JSON file"""
+        try:
+            if not os.path.exists(self.proxy_path):
+                logging.warning(f"Proxy configuration file not found: {self.proxy_path}")
+                return []
+                
+            with open(self.proxy_path, 'r') as f:
+                proxies = json.load(f)
+            logging.info(f"Loaded {len(proxies)} proxies")
+            return proxies
+        except json.JSONDecodeError as e:
+            logging.error(f"Error parsing proxy configuration: {str(e)}")
+            return []
+            
+    def save_leads(self, leads: List[Dict], source: str):
+        """Save scraped leads to JSON file"""
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.output_dir, f"leads_{source}_{timestamp}.json")
         
+        with open(filename, 'w') as f:
+            json.dump(leads, f, indent=2)
+        logging.info(f"Saved {len(leads)} leads to {filename}")
+        
+    def run(self, source_name: Optional[str] = None):
+        """Run the spider for specified or all sources"""
+        settings = get_project_settings()
+        settings.update({
+            'ROTATING_PROXY_LIST': self.proxies,
+            'DOWNLOAD_DELAY': 2,  # Be polite with requests
+            'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+            'COOKIES_ENABLED': False,
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        
+        process = CrawlerProcess(settings)
+        
+        try:
+            if source_name:
+                if source_name not in self.sources:
+                    raise ValueError(f"Source '{source_name}' not found in configuration")
+                sources_to_crawl = {source_name: self.sources[source_name]}
+            else:
+                sources_to_crawl = self.sources
+                
+            for source, config in sources_to_crawl.items():
+                logging.info(f"Starting spider for source: {source}")
+                process.crawl(
+                    RealEstateSpider,
+                    source=source,
+                    config=config,
+                    callback=lambda leads, src=source: self.save_leads(leads, src)
+                )
+                
+            process.start()
+            logging.info("Spider run completed successfully")
+            
+        except Exception as e:
+            logging.error(f"Error running spider: {str(e)}")
+            raise
+
+if __name__ == "__main__":
+    try:
+        runner = SpiderRunner()
+        if len(sys.argv) > 1:
+            runner.run(sys.argv[1])
+        else:
+            runner.run()
     except Exception as e:
-        logger.error(f"Error running spider: {str(e)}")
-        sys.exit(1)
-
-def main():
-    """Main entry point for the script."""
-    parser = argparse.ArgumentParser(
-        description='Run the social leads spider to find real estate leads on social media.'
-    )
-    
-    parser.add_argument(
-        'location',
-        type=str,
-        help='Location to search for leads (city, state)'
-    )
-    
-    parser.add_argument(
-        '--lead-type',
-        type=str,
-        choices=['buy', 'sell', 'refi'],
-        default='buy',
-        help='Type of lead to search for (default: buy)'
-    )
-    
-    parser.add_argument(
-        '--output',
-        type=str,
-        help='File to save the results to (optional)'
-    )
-    
-    args = parser.parse_args()
-    
-    run_spider(
-        location=args.location,
-        lead_type=args.lead_type,
-        output_file=args.output
-    )
-
-if __name__ == '__main__':
-    main() 
+        logging.error(f"Spider runner failed: {str(e)}")
+        sys.exit(1) 

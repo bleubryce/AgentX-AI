@@ -1,99 +1,72 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - MARKET_DATA_API_KEY=${MARKET_DATA_API_KEY}
-      - CRM_API_KEY=${CRM_API_KEY}
-      - EMAIL_SERVICE_API_KEY=${EMAIL_SERVICE_API_KEY}
-      - DEBUG_MODE=false
-      - LOG_LEVEL=INFO
-      - CACHE_TTL=3600
-    depends_on:
-      - db
-      - redis
-    volumes:
-      - ./src:/app/src
-      - ./config:/app/config
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
+  # PostgreSQL Database
   db:
-    image: postgres:12-alpine
+    image: postgres:14-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
     environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=subscription_db
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
       timeout: 5s
       retries: 5
 
+  # Redis for caching
   redis:
-    image: redis:6-alpine
+    image: redis:alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
 
-  nginx:
-    image: nginx:alpine
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/ssl:/etc/nginx/ssl
+      - "8000:8000"
     depends_on:
-      - app
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/subscription_db
+      - REDIS_URL=redis://redis:6379/0
+      - STRIPE_API_KEY=${STRIPE_API_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - JWT_SECRET=dev_jwt_secret
+      - CORS_ORIGINS=http://localhost:3000
     volumes:
-      - grafana_data:/var/lib/grafana
+      - ./src:/app/src
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
     depends_on:
-      - prometheus
+      - backend
+    environment:
+      - API_URL=http://backend:8000
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:
-  prometheus_data:
-  grafana_data: 
+  redis_data: 
