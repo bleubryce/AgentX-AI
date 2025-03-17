@@ -1,33 +1,23 @@
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import api from '../services/api';
 
-type User = {
+interface User {
   id: string;
   email: string;
   firstName: string;
   lastName: string;
   role: string;
-};
+}
 
-type RegisterData = {
-  email: string;
-  password: string;
-  firstName: string;
-  lastName: string;
-};
-
-type AuthContextType = {
+interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  register: (userData: RegisterData) => Promise<void>;
-  forgotPassword: (email: string) => Promise<void>;
-  resetPassword: (token: string, password: string) => Promise<void>;
-};
+}
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -75,48 +65,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const register = async (userData: RegisterData) => {
-    setIsLoading(true);
-    try {
-      const response = await api.post('/auth/register', userData);
-      localStorage.setItem('token', response.data.token);
-      await checkAuthStatus();
-    } catch (error) {
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const forgotPassword = async (email: string) => {
-    try {
-      await api.post('/auth/forgot-password', { email });
-    } catch (error) {
-      throw error;
-    }
-  };
-
-  const resetPassword = async (token: string, password: string) => {
-    try {
-      await api.post('/auth/reset-password', { token, password });
-    } catch (error) {
-      throw error;
-    }
+  const value = {
+    user,
+    isAuthenticated: !!user,
+    isLoading,
+    login,
+    logout,
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        isLoading,
-        login,
-        logout,
-        register,
-        forgotPassword,
-        resetPassword,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
@@ -124,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
